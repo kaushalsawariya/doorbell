@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Simple WebRTC Video Chat</title>
+</head>
+<body>
+  <h2>Simple Video Chat</h2>
+  <video id="localVideo" autoplay muted playsinline></video>
+  <video id="remoteVideo" autoplay playsinline></video>
+
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
+  <script>
+    // Paste your Firebase config here
+  
+
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBSqmTTU86LPAHAtdE91HpEFoBz2ti0O_k",
+  authDomain: "doorbell-a0636.firebaseapp.com",
+  projectId: "doorbell-a0636",
+  storageBucket: "doorbell-a0636.firebasestorage.app",
+  messagingSenderId: "771719971539",
+  appId: "1:771719971539:web:e30773690238df679e0a26",
+  measurementId: "G-V7X3HRQVMT"
+};
+
+    firebase.initializeApp(firebaseConfig);
+    const firestore = firebase.firestore();
+
+    const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    let pc = new RTCPeerConnection(servers);
+
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+
+    let roomId = window.location.pathname.split('/').pop();  // get room from URL
+
+    async function init() {
+      // Get local media
+      const localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localVideo.srcObject = localStream;
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+      const roomRef = firestore.collection('rooms').doc(roomId);
+      const callerCandidatesCollection = roomRef.collection('callerCandidates');
+      const calleeCandidatesCollection = roomRef.collection('calleeCandidates');
+
+      pc.onicecandidate = event => {
+        if (event.candidate) {
+          callerCandidatesCollection.add(event.candidate.toJSON());
+        }
+      };
+
+      pc.ontrack = event => {
+        remoteVideo.srcObject = event.streams[0];
+      };
+
+      const roomSnapshot = await roomRef.get();
+
+      if (!roomSnapshot.exists) {
+        // Create offer (caller)
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        const roomWithOffer = {
+          offer: {
+            type: offer.type,
+            sdp: offer.sdp
+          }
+        };
+        await roomRef.set(roomWithOffer);
+
+        roomRef.onSnapshot(async snapshot => {
+          const data = snapshot.data();
+          if (!pc.currentRemoteDescription && data?.answer) {
+            const answer = new RTCSessionDescription(data.answer);
+            await pc.setRemoteDescription(answer);
+          }
+        });
+
+        calleeCandidatesCollection.onSnapshot(snapshot => {
+          snapshot.docChanges().forEach(change => {
+            if (change.type === 'added') {
+              const candidate = new RTCIceCandidate(change.doc.data());
+              pc.addIceCandidate(candidate);
+            }
+          });
+        });
+      } else {
+        // Join room (callee)
+        const offer = roomSnapshot.data().offer;
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        const roomWithAnswer = {
+          answer: {
+            type: answer.type,
+            sdp: answer.sdp
+          }
+        };
+        await roomRef.update(roomWithAnswer);
+
+        callerCandidatesCollection.onSnapshot(snapshot => {
+          snapshot.docChanges().forEach(change => {
+            if (change.type === 'added') {
+              const candidate = new RTCIceCandidate(change.doc.data());
+              pc.addIceCandidate(candidate);
+            }
+          });
+        });
+
+        pc.onicecandidate = event => {
+          if (event.candidate) {
+            calleeCandidatesCollection.add(event.candidate.toJSON());
+          }
+        };
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
