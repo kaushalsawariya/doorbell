@@ -11,117 +11,98 @@
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
 
-  <script>
-    // Paste your Firebase config here
-  
+<script>
+  // Your Firebase config (already in place)
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_AUTH_DOMAIN",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_BUCKET",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+  firebase.initializeApp(firebaseConfig);
+  const firestore = firebase.firestore();
 
+  const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+  let pc = new RTCPeerConnection(servers);
 
-const firebaseConfig = {
-  apiKey: "AIzaSyBSqmTTU86LPAHAtdE91HpEFoBz2ti0O_k",
-  authDomain: "doorbell-a0636.firebaseapp.com",
-  projectId: "doorbell-a0636",
-  storageBucket: "doorbell-a0636.firebasestorage.app",
-  messagingSenderId: "771719971539",
-  appId: "1:771719971539:web:e30773690238df679e0a26",
-  measurementId: "G-V7X3HRQVMT"
-};
+  const localVideo  = document.getElementById('localVideo');
+  const remoteVideo = document.getElementById('remoteVideo');
 
-    firebase.initializeApp(firebaseConfig);
-    const firestore = firebase.firestore();
+  // ←—> **HASH‑BASED ROOM ID** ←—–
+  let roomId = window.location.hash.substring(1);
+  if (!roomId) {
+    roomId = 'defaultRoom';
+  }
 
-    const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-    let pc = new RTCPeerConnection(servers);
+  async function init() {
+    // 1. get local stream
+    const localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    localVideo.srcObject = localStream;
+    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-    const localVideo = document.getElementById('localVideo');
-    const remoteVideo = document.getElementById('remoteVideo');
+    // 2. prepare Firestore collections
+    const roomRef = firestore.collection('rooms').doc(roomId);
+    const callerCandidatesCollection = roomRef.collection('callerCandidates');
+    const calleeCandidatesCollection = roomRef.collection('calleeCandidates');
 
-    let roomId = window.location.pathname.split('/').pop();  // get room from URL
+    pc.onicecandidate = e => {
+      if (e.candidate) callerCandidatesCollection.add(e.candidate.toJSON());
+    };
+    pc.ontrack = e => remoteVideo.srcObject = e.streams[0];
 
-    async function init() {
-      // Get local media
-      const localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      localVideo.srcObject = localStream;
-      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    // 3. see if room already exists
+    const roomSnapshot = await roomRef.get();
+    if (!roomSnapshot.exists) {
+      // — Caller —
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await roomRef.set({ offer: { type: offer.type, sdp: offer.sdp } });
 
-      const roomRef = firestore.collection('rooms').doc(roomId);
-      const callerCandidatesCollection = roomRef.collection('callerCandidates');
-      const calleeCandidatesCollection = roomRef.collection('calleeCandidates');
-
-      pc.onicecandidate = event => {
-        if (event.candidate) {
-          callerCandidatesCollection.add(event.candidate.toJSON());
+      // listen for answer
+      roomRef.onSnapshot(snap => {
+        const data = snap.data();
+        if (data?.answer && !pc.currentRemoteDescription) {
+          pc.setRemoteDescription(new RTCSessionDescription(data.answer));
         }
+      });
+
+      // listen for callee’s ICE
+      calleeCandidatesCollection.onSnapshot(snap => {
+        snap.docChanges().forEach(change => {
+          if (change.type === 'added') {
+            pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+          }
+        });
+      });
+
+    } else {
+      // — Callee —
+      const offer = roomSnapshot.data().offer;
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await roomRef.update({ answer: { type: answer.type, sdp: answer.sdp } });
+
+      // listen for caller’s ICE
+      callerCandidatesCollection.onSnapshot(snap => {
+        snap.docChanges().forEach(change => {
+          if (change.type === 'added') {
+            pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+          }
+        });
+      });
+
+      // send our ICE
+      pc.onicecandidate = e => {
+        if (e.candidate) calleeCandidatesCollection.add(e.candidate.toJSON());
       };
-
-      pc.ontrack = event => {
-        remoteVideo.srcObject = event.streams[0];
-      };
-
-      const roomSnapshot = await roomRef.get();
-
-      if (!roomSnapshot.exists) {
-        // Create offer (caller)
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-
-        const roomWithOffer = {
-          offer: {
-            type: offer.type,
-            sdp: offer.sdp
-          }
-        };
-        await roomRef.set(roomWithOffer);
-
-        roomRef.onSnapshot(async snapshot => {
-          const data = snapshot.data();
-          if (!pc.currentRemoteDescription && data?.answer) {
-            const answer = new RTCSessionDescription(data.answer);
-            await pc.setRemoteDescription(answer);
-          }
-        });
-
-        calleeCandidatesCollection.onSnapshot(snapshot => {
-          snapshot.docChanges().forEach(change => {
-            if (change.type === 'added') {
-              const candidate = new RTCIceCandidate(change.doc.data());
-              pc.addIceCandidate(candidate);
-            }
-          });
-        });
-      } else {
-        // Join room (callee)
-        const offer = roomSnapshot.data().offer;
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
-
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-
-        const roomWithAnswer = {
-          answer: {
-            type: answer.type,
-            sdp: answer.sdp
-          }
-        };
-        await roomRef.update(roomWithAnswer);
-
-        callerCandidatesCollection.onSnapshot(snapshot => {
-          snapshot.docChanges().forEach(change => {
-            if (change.type === 'added') {
-              const candidate = new RTCIceCandidate(change.doc.data());
-              pc.addIceCandidate(candidate);
-            }
-          });
-        });
-
-        pc.onicecandidate = event => {
-          if (event.candidate) {
-            calleeCandidatesCollection.add(event.candidate.toJSON());
-          }
-        };
-      }
     }
+  }
 
-    init();
-  </script>
+  init();
+</script>
+
 </body>
 </html>
