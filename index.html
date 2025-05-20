@@ -13,14 +13,16 @@
 
 <script>
   // Your Firebase config (already in place)
-    const firebaseConfig = {
-      apiKey: "YOUR_API_KEY",
-      authDomain: "YOUR_AUTH_DOMAIN",
-      projectId: "YOUR_PROJECT_ID",
-      storageBucket: "YOUR_BUCKET",
-      messagingSenderId: "YOUR_SENDER_ID",
-      appId: "YOUR_APP_ID"
-    };
+const firebaseConfig = {
+  apiKey: "AIzaSyBSqmTTU86LPAHAtdE91HpEFoBz2ti0O_k",
+  authDomain: "doorbell-a0636.firebaseapp.com",
+  projectId: "doorbell-a0636",
+  storageBucket: "doorbell-a0636.appspot.com", // <-- FIXED
+  messagingSenderId: "771719971539",
+  appId: "1:771719971539:web:e30773690238df679e0a26",
+  measurementId: "G-V7X3HRQVMT"
+};
+
   firebase.initializeApp(firebaseConfig);
   const firestore = firebase.firestore();
 
